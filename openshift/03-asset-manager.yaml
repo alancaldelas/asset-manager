@@ -37,7 +37,9 @@ spec:
     spec:
       containers:
         - name: webui
-          image: occ-quay.apps.sno.oset.amd.com/alan/asset-manager:latest
+          # Built in-cluster via the binary BuildConfig (oc start-build
+          # asset-manager --from-dir .), which pushes to the internal registry.
+          image: image-registry.openshift-image-registry.svc:5000/infraops/asset-manager:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 3000
@@ -61,15 +63,27 @@ spec:
             # The app reads DATABASE_URL; build it from the secret values.
             - name: DATABASE_URL
               value: "postgresql://$(DB_USER):$(DB_PASSWORD)@postgres:5432/$(DB_NAME)?sslmode=disable"
+            # Signing key for session cookies (JWT).
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: session-secret
+            # Initial admin password used to seed the first account.
+            - name: ADMIN_DEFAULT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: admin-default-password
           readinessProbe:
             httpGet:
-              path: /api/servers
+              path: /api/health
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /api/servers
+              path: /api/health
               port: 3000
             initialDelaySeconds: 15
             periodSeconds: 20

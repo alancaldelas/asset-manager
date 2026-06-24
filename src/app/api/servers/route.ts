@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import { db, NewServerAsset } from "@/lib/db";
+import { authorize } from "@/lib/auth";
 
 // GET /api/servers - Get all servers and storage mode
 export async function GET() {
   try {
+    const auth = await authorize("viewer");
+    if ("response" in auth) return auth.response;
+
     const servers = await db.getServers();
     const storageMode = db.getStorageMode();
     return NextResponse.json({
@@ -23,6 +27,9 @@ export async function GET() {
 // POST /api/servers - Create a new server
 export async function POST(request: Request) {
   try {
+    const auth = await authorize("operator");
+    if ("response" in auth) return auth.response;
+
     const body = await request.json();
     
     // Simple validation

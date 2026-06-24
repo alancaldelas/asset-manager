@@ -23,11 +23,18 @@ import {
   ServerCrash,
   FileCode,
   Terminal,
-  ExternalLink
+  ExternalLink,
+  Users,
+  LogOut,
+  ShieldCheck
 } from "lucide-react";
-import { ServerAsset, NewServerAsset } from "@/lib/db";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import type { ServerAsset, NewServerAsset, PublicUser } from "@/lib/db";
 
 export default function Home() {
+  const router = useRouter();
+  const [currentUser, setCurrentUser] = useState<PublicUser | null>(null);
   const [servers, setServers] = useState<ServerAsset[]>([]);
   const [storageMode, setStorageMode] = useState<{ type: string; details: string }>({
     type: "Loading...",
@@ -98,9 +105,39 @@ export default function Home() {
     }
   };
 
+  // Fetch the currently authenticated user
+  const fetchCurrentUser = async () => {
+    try {
+      const res = await fetch("/api/auth/me");
+      const data = await res.json();
+      if (data.success) {
+        setCurrentUser(data.user);
+      }
+    } catch (err) {
+      console.error("Failed to load current user", err);
+    }
+  };
+
   useEffect(() => {
+    fetchCurrentUser();
     fetchServers();
   }, []);
+
+  // Role-based permissions for the UI
+  const canWrite =
+    currentUser?.role === "admin" || currentUser?.role === "operator";
+  const isAdmin = currentUser?.role === "admin";
+
+  // Log out and return to the login page
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch (err) {
+      console.error("Logout failed", err);
+    }
+    router.push("/login");
+    router.refresh();
+  };
 
   // Open drawer to add a server
   const handleAddClick = () => {
@@ -266,14 +303,48 @@ export default function Home() {
               <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin text-cyan-400" : ""}`} />
             </button>
 
+            {/* Users link (admin only) */}
+            {isAdmin && (
+              <Link
+                href="/users"
+                className="flex items-center gap-2 px-3 py-2 text-zinc-300 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 rounded-lg text-sm font-semibold transition duration-200"
+                title="Manage users"
+              >
+                <Users className="w-4 h-4" />
+                Users
+              </Link>
+            )}
+
             {/* Add Server Button */}
-            <button
-              onClick={handleAddClick}
-              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-semibold text-sm rounded-lg transition duration-300 shadow-[0_4px_20px_rgba(6,182,212,0.25)] hover:shadow-[0_4px_25px_rgba(6,182,212,0.4)]"
-            >
-              <Plus className="w-4 h-4 stroke-[3px]" />
-              Add Server
-            </button>
+            {canWrite && (
+              <button
+                onClick={handleAddClick}
+                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-semibold text-sm rounded-lg transition duration-300 shadow-[0_4px_20px_rgba(6,182,212,0.25)] hover:shadow-[0_4px_25px_rgba(6,182,212,0.4)]"
+              >
+                <Plus className="w-4 h-4 stroke-[3px]" />
+                Add Server
+              </button>
+            )}
+
+            {/* Current user + logout */}
+            {currentUser && (
+              <div className="flex items-center gap-2 pl-3 ml-1 border-l border-zinc-800">
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs">
+                  <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+                  <span className="font-semibold text-zinc-200">{currentUser.username}</span>
+                  <span className="px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider bg-zinc-800 text-zinc-400 rounded">
+                    {currentUser.role}
+                  </span>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="p-2 text-zinc-400 hover:text-red-400 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 rounded-lg transition duration-200"
+                  title="Log out"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -601,22 +672,26 @@ export default function Home() {
                             </button>
 
                             {/* Edit */}
-                            <button
-                              onClick={() => handleEditClick(server)}
-                              className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-md border border-transparent hover:border-zinc-700 transition"
-                              title="Edit asset details"
-                            >
-                              <Edit3 className="w-4 h-4" />
-                            </button>
+                            {canWrite && (
+                              <button
+                                onClick={() => handleEditClick(server)}
+                                className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-md border border-transparent hover:border-zinc-700 transition"
+                                title="Edit asset details"
+                              >
+                                <Edit3 className="w-4 h-4" />
+                              </button>
+                            )}
 
                             {/* Delete */}
-                            <button
-                              onClick={() => handleDeleteClick(server)}
-                              className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-zinc-800 rounded-md border border-transparent hover:border-zinc-700 transition"
-                              title="Decommission server"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                            {canWrite && (
+                              <button
+                                onClick={() => handleDeleteClick(server)}
+                                className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-zinc-800 rounded-md border border-transparent hover:border-zinc-700 transition"
+                                title="Decommission server"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

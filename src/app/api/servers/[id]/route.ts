@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { authorize } from "@/lib/auth";
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -8,6 +9,9 @@ interface RouteContext {
 // GET /api/servers/[id] - Get a single server
 export async function GET(request: Request, context: RouteContext) {
   try {
+    const auth = await authorize("viewer");
+    if ("response" in auth) return auth.response;
+
     const { id } = await context.params;
     const serverId = parseInt(id, 10);
 
@@ -39,6 +43,9 @@ export async function GET(request: Request, context: RouteContext) {
 // PUT /api/servers/[id] - Update a server
 export async function PUT(request: Request, context: RouteContext) {
   try {
+    const auth = await authorize("operator");
+    if ("response" in auth) return auth.response;
+
     const { id } = await context.params;
     const serverId = parseInt(id, 10);
 
@@ -72,6 +79,9 @@ export async function PUT(request: Request, context: RouteContext) {
 // DELETE /api/servers/[id] - Delete a server
 export async function DELETE(request: Request, context: RouteContext) {
   try {
+    const auth = await authorize("operator");
+    if ("response" in auth) return auth.response;
+
     const { id } = await context.params;
     const serverId = parseInt(id, 10);
 
