@@ -1,0 +1,197 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: infraops
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: infraops
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-credentials
+  namespace: infraops
+type: Opaque
+stringData:
+  # Base64 encoded or string data for k8s Secrets
+  POSTGRES_USER: "infra_admin"
+  POSTGRES_PASSWORD: "SuperSecureDbPassword123"
+  POSTGRES_DB: "asset_manager"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: infraops
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP
+  selector:
+    app: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-deployment
+  namespace: infraops
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: POSTGRES_DB
+          ports:
+            - containerPort: 5432
+              name: postgres
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
+            requests:
+              cpu: 250m
+              memory: 256Mi
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: asset-manager-service
+  namespace: infraops
+spec:
+  type: LoadBalancer # Change to ClusterIP if using Ingress controller
+  ports:
+    - port: 80
+      targetPort: 3000
+      protocol: TCP
+      name: http
+  selector:
+    app: asset-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: asset-manager-deployment
+  namespace: infraops
+  labels:
+    app: asset-manager
+spec:
+  replicas: 2 # Standard high-availability setup
+  selector:
+    matchLabels:
+      app: asset-manager
+  template:
+    metadata:
+      labels:
+        app: asset-manager
+    spec:
+      containers:
+        - name: webui
+          image: asset-manager:latest # Replace with your container registry path, e.g. gcr.io/my-project/asset-manager:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            # Map Secret variables into separate environment variables for building connection URL
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: POSTGRES_PASSWORD
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: POSTGRES_DB
+            # Construct PostgreSQL connection URL dynamically
+            - name: DATABASE_URL
+              value: "postgresql://$(DB_USER):$(DB_PASSWORD)@postgres-service:5432/$(DB_NAME)?sslmode=disable"
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /api/servers
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /api/servers
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: asset-manager-ingress
+  namespace: infraops
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: asset-manager-service
+                port:
+                  number: 80
