@@ -27,26 +27,32 @@ ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+# Create a non-root user that belongs to the root group (GID 0). OpenShift's
+# restricted-v2 SCC runs containers with an arbitrary UID that is always a
+# member of the root group, so all writable paths must be group-owned by root
+# and group-writable.
+RUN addgroup --system --gid 1001 nodejs \
+  && adduser --system --uid 1001 --ingroup root nextjs
 
 # Set up standard public and static asset directories
 COPY --from=builder /app/public ./public
 
-# Set the correct permission for Next.js cache and standalone build
-RUN mkdir .next
-RUN chown nextjs:nodejs .next
-
-# Create data directory for local JSON storage fallback and set permissions
-RUN mkdir -p data
-RUN chown nextjs:nodejs data
+# Writable dirs: Next.js runtime cache (.next/cache) and the JSON storage
+# fallback (data/). Created up front so permissions can be relaxed for GID 0.
+RUN mkdir -p .next data
 
 # Automatically leverage output traces to reduce image size
 # https://nextjs.org/docs/advanced-features/output-file-tracing
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=1001:0 /app/.next/standalone ./
+COPY --from=builder --chown=1001:0 /app/.next/static ./.next/static
 
-USER nextjs
+# Hand everything to the root group with group read/write/execute so that the
+# arbitrary UID assigned by OpenShift can still read code and write caches.
+RUN chown -R 1001:0 /app \
+  && chmod -R g+rwX /app
+
+# Use a numeric UID so the platform does not need an /etc/passwd entry.
+USER 1001
 
 EXPOSE 3000
 
