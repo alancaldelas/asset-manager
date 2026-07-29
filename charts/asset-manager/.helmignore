@@ -8,4 +8,4 @@
 *.orig
 .idea/
 .vscode/
-*.tgz
+/*.tgz

@@ -11,7 +11,7 @@ interface RouteContext {
 // GET /api/users/[id] - Get a single user (admin only)
 export async function GET(request: Request, context: RouteContext) {
   try {
-    const auth = await authorize("admin");
+    const auth = await authorize(request, "admin");
     if ("response" in auth) return auth.response;
 
     const { id } = await context.params;
@@ -37,7 +37,7 @@ export async function GET(request: Request, context: RouteContext) {
 // PUT /api/users/[id] - Update a user (admin only)
 export async function PUT(request: Request, context: RouteContext) {
   try {
-    const auth = await authorize("admin");
+    const auth = await authorize(request, "admin");
     if ("response" in auth) return auth.response;
 
     const { id } = await context.params;
@@ -101,7 +101,7 @@ export async function PUT(request: Request, context: RouteContext) {
 // DELETE /api/users/[id] - Delete a user (admin only)
 export async function DELETE(request: Request, context: RouteContext) {
   try {
-    const auth = await authorize("admin");
+    const auth = await authorize(request, "admin");
     if ("response" in auth) return auth.response;
 
     const { id } = await context.params;
