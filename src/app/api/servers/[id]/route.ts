@@ -9,7 +9,7 @@ interface RouteContext {
 // GET /api/servers/[id] - Get a single server
 export async function GET(request: Request, context: RouteContext) {
   try {
-    const auth = await authorize("viewer");
+    const auth = await authorize(request, "viewer");
     if ("response" in auth) return auth.response;
 
     const { id } = await context.params;
@@ -43,7 +43,7 @@ export async function GET(request: Request, context: RouteContext) {
 // PUT /api/servers/[id] - Update a server
 export async function PUT(request: Request, context: RouteContext) {
   try {
-    const auth = await authorize("operator");
+    const auth = await authorize(request, "operator");
     if ("response" in auth) return auth.response;
 
     const { id } = await context.params;
@@ -79,7 +79,7 @@ export async function PUT(request: Request, context: RouteContext) {
 // DELETE /api/servers/[id] - Delete a server
 export async function DELETE(request: Request, context: RouteContext) {
   try {
-    const auth = await authorize("operator");
+    const auth = await authorize(request, "operator");
     if ("response" in auth) return auth.response;
 
     const { id } = await context.params;

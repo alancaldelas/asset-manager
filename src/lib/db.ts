@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import fs from "fs/promises";
 import path from "path";
 
@@ -25,6 +26,28 @@ export type PublicUser = Omit<User, "password_hash">;
 export function toPublicUser(user: User): PublicUser {
   // Strip the password hash before returning user data to any caller.
   const { password_hash: _omit, ...rest } = user;
+  void _omit;
+  return rest;
+}
+
+// Personal API token tied to a user. The raw token value is never stored; we
+// keep only its SHA-256 hash plus a short prefix for display. A token inherits
+// the permissions (role) of its owning user.
+export interface ApiToken {
+  id: number;
+  user_id: number;
+  name: string;
+  token_hash: string;
+  token_prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+// Safe representation of a token without the hash (for listing in the UI/API).
+export type PublicApiToken = Omit<ApiToken, "token_hash">;
+
+export function toPublicApiToken(token: ApiToken): PublicApiToken {
+  const { token_hash: _omit, ...rest } = token;
   void _omit;
   return rest;
 }
@@ -56,6 +79,7 @@ class DatabaseManager {
   private isPostgres = false;
   private fallbackFilePath = path.join(process.cwd(), "data", "servers.json");
   private usersFilePath = path.join(process.cwd(), "data", "users.json");
+  private tokensFilePath = path.join(process.cwd(), "data", "tokens.json");
   private initialized = false;
 
   constructor() {
@@ -114,6 +138,17 @@ class DatabaseManager {
               role VARCHAR(20) NOT NULL DEFAULT 'viewer',
               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+          `);
+          await client.query(`
+            CREATE TABLE IF NOT EXISTS api_tokens (
+              id SERIAL PRIMARY KEY,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              name VARCHAR(100) NOT NULL,
+              token_hash VARCHAR(64) UNIQUE NOT NULL,
+              token_prefix VARCHAR(20) NOT NULL,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              last_used_at TIMESTAMP
             );
           `);
 
@@ -677,6 +712,168 @@ class DatabaseManager {
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return null;
     return toPublicUser(user);
+  }
+
+  // ---------------------------------------------------------------------------
+  // API Tokens
+  // ---------------------------------------------------------------------------
+
+  // SHA-256 is appropriate here: API tokens are high-entropy random values, so
+  // a fast cryptographic hash is sufficient (and lets us look tokens up by hash).
+  private hashToken(raw: string): string {
+    return crypto.createHash("sha256").update(raw).digest("hex");
+  }
+
+  private async readTokensFile(): Promise<ApiToken[]> {
+    try {
+      const data = await fs.readFile(this.tokensFilePath, "utf8");
+      return JSON.parse(data);
+    } catch {
+      // Missing file simply means no tokens have been created yet.
+      return [];
+    }
+  }
+
+  private async writeTokensFile(data: ApiToken[]): Promise<void> {
+    try {
+      await fs.mkdir(path.dirname(this.tokensFilePath), { recursive: true });
+      await fs.writeFile(this.tokensFilePath, JSON.stringify(data, null, 2), "utf8");
+    } catch (err) {
+      console.error("Error writing tokens JSON file:", err);
+    }
+  }
+
+  private mapTokenRow(row: Omit<ApiToken, "created_at" | "last_used_at"> & {
+    created_at: Date | string;
+    last_used_at: Date | string | null;
+  }): ApiToken {
+    return {
+      ...row,
+      created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+      last_used_at:
+        row.last_used_at instanceof Date ? row.last_used_at.toISOString() : row.last_used_at,
+    };
+  }
+
+  // Create a token for a user. Returns the one-time plaintext token plus the
+  // stored (hashless) record. The plaintext is never persisted or retrievable.
+  async createApiToken(
+    userId: number,
+    name: string
+  ): Promise<{ token: string; tokenInfo: PublicApiToken }> {
+    await this.init();
+
+    const raw = `am_${crypto.randomBytes(32).toString("base64url")}`;
+    const token_hash = this.hashToken(raw);
+    const token_prefix = raw.slice(0, 11); // "am_" + 8 chars
+
+    if (this.isPostgres && this.pool) {
+      try {
+        const res = await this.pool.query(
+          `INSERT INTO api_tokens (user_id, name, token_hash, token_prefix)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id, user_id, name, token_hash, token_prefix, created_at, last_used_at`,
+          [userId, name, token_hash, token_prefix]
+        );
+        return { token: raw, tokenInfo: toPublicApiToken(this.mapTokenRow(res.rows[0])) };
+      } catch (error) {
+        console.error("PostgreSQL insert error, falling back to JSON:", error);
+      }
+    }
+
+    const tokens = await this.readTokensFile();
+    const newId = tokens.length > 0 ? Math.max(...tokens.map((t) => t.id)) + 1 : 1;
+    const record: ApiToken = {
+      id: newId,
+      user_id: userId,
+      name,
+      token_hash,
+      token_prefix,
+      created_at: new Date().toISOString(),
+      last_used_at: null,
+    };
+    tokens.push(record);
+    await this.writeTokensFile(tokens);
+    return { token: raw, tokenInfo: toPublicApiToken(record) };
+  }
+
+  async getApiTokensForUser(userId: number): Promise<PublicApiToken[]> {
+    await this.init();
+
+    if (this.isPostgres && this.pool) {
+      try {
+        const res = await this.pool.query(
+          `SELECT id, user_id, name, token_hash, token_prefix, created_at, last_used_at
+           FROM api_tokens WHERE user_id = $1 ORDER BY created_at DESC`,
+          [userId]
+        );
+        return res.rows.map((row) => toPublicApiToken(this.mapTokenRow(row)));
+      } catch (error) {
+        console.error("PostgreSQL query error, falling back to JSON:", error);
+      }
+    }
+
+    const tokens = await this.readTokensFile();
+    return tokens
+      .filter((t) => t.user_id === userId)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .map(toPublicApiToken);
+  }
+
+  // Delete a token, scoped to its owner so users can only revoke their own.
+  async deleteApiToken(userId: number, tokenId: number): Promise<boolean> {
+    await this.init();
+
+    if (this.isPostgres && this.pool) {
+      try {
+        const res = await this.pool.query(
+          "DELETE FROM api_tokens WHERE id = $1 AND user_id = $2",
+          [tokenId, userId]
+        );
+        return (res.rowCount ?? 0) > 0;
+      } catch (error) {
+        console.error("PostgreSQL delete error, falling back to JSON:", error);
+      }
+    }
+
+    const tokens = await this.readTokensFile();
+    const filtered = tokens.filter((t) => !(t.id === tokenId && t.user_id === userId));
+    if (filtered.length === tokens.length) return false;
+    await this.writeTokensFile(filtered);
+    return true;
+  }
+
+  // Resolve the user behind a raw API token, updating its last-used timestamp.
+  async getUserByApiToken(rawToken: string): Promise<PublicUser | null> {
+    await this.init();
+    const token_hash = this.hashToken(rawToken);
+
+    if (this.isPostgres && this.pool) {
+      try {
+        const res = await this.pool.query(
+          "SELECT user_id FROM api_tokens WHERE token_hash = $1",
+          [token_hash]
+        );
+        if (res.rows.length === 0) return null;
+        const userId = res.rows[0].user_id as number;
+        // Best-effort: record usage without blocking the request on failure.
+        this.pool
+          .query("UPDATE api_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE token_hash = $1", [
+            token_hash,
+          ])
+          .catch(() => {});
+        return this.getUserById(userId);
+      } catch (error) {
+        console.error("PostgreSQL query error, falling back to JSON:", error);
+      }
+    }
+
+    const tokens = await this.readTokensFile();
+    const match = tokens.find((t) => t.token_hash === token_hash);
+    if (!match) return null;
+    match.last_used_at = new Date().toISOString();
+    await this.writeTokensFile(tokens);
+    return this.getUserById(match.user_id);
   }
 }
 

@@ -1,9 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: infraops
-  labels:
-    app.kubernetes.io/part-of: asset-manager
-# On OpenShift you may prefer to create the project with:
-#   oc new-project infraops --display-name="Infrastructure Ops"
-# Applying this Namespace works too, but does not set up default project quotas.

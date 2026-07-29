@@ -1,0 +1,33 @@
+apiVersion: v2
+name: asset-manager
+description: Infrastructure inventory and server asset management platform (Next.js)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - asset-manager
+  - inventory
+  - nextjs
+sources:
+  - https://github.com/your-org/asset-manager
+maintainers:
+  - name: InfraOps
+
+# PostgreSQL is provided one of two ways, selected at install time:
+#
+#   * Default (openshift.enabled=false): the Bitnami PostgreSQL subchart below
+#     is deployed. Great for vanilla Kubernetes and local/dev clusters.
+#   * OpenShift (openshift.enabled=true): the Bitnami subchart is disabled and
+#     an in-chart SCLorg PostgreSQL Deployment is used instead, because Bitnami
+#     images can conflict with OpenShift's restricted-v2 SCC (arbitrary UID).
+#     When you enable OpenShift mode you must also set postgresql.enabled=false
+#     (values-openshift.yaml does this for you).
+#
+# Helm can only toggle a subchart via a static boolean value path (`condition`),
+# so the two flags are coordinated rather than derived from one another. A guard
+# in templates/_helpers.tpl fails the render if both databases are enabled.
+dependencies:
+  - name: postgresql
+    version: "16.7.4"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled

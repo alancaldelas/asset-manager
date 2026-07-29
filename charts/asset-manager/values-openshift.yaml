@@ -1,0 +1,28 @@
+# OpenShift overrides.
+#
+#   helm dependency update charts/asset-manager        # (only needed once)
+#   helm install asset-manager charts/asset-manager \
+#     -n infraops --create-namespace \
+#     -f charts/asset-manager/values-openshift.yaml \
+#     --set image.repository=quay.io/your-org/asset-manager \
+#     --set image.tag=latest
+#
+# Enables the in-chart SCLorg PostgreSQL (arbitrary-UID friendly) and a Route,
+# and disables the Bitnami subchart + Ingress.
+
+openshift:
+  enabled: true
+
+# Required: the Bitnami subchart must be off in OpenShift mode.
+postgresql:
+  enabled: false
+
+ingress:
+  enabled: false
+
+# Point at wherever you pushed the image (or the internal registry, e.g.
+# image-registry.openshift-image-registry.svc:5000/infraops/asset-manager).
+image:
+  repository: quay.io/your-org/asset-manager
+  tag: latest
+  pullPolicy: Always

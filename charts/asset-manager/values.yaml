@@ -1,0 +1,151 @@
+# Default values for asset-manager.
+# This is the vanilla-Kubernetes configuration: it deploys the Bitnami
+# PostgreSQL subchart and exposes the app via an Ingress.
+#
+# For OpenShift, install with:  helm install ... -f values-openshift.yaml
+
+# -- OpenShift mode. When true, the Bitnami subchart is NOT used; instead an
+# in-chart SCLorg PostgreSQL Deployment (arbitrary-UID friendly) is created and
+# the app is exposed via a Route. You must also set postgresql.enabled=false.
+openshift:
+  enabled: false
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/your-org/asset-manager
+  # Overrides the image tag. Defaults to the chart appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Extra environment variables passed verbatim to the app container.
+extraEnv: []
+#  - name: FOO
+#    value: bar
+
+# Application configuration.
+app:
+  # Initial password for the auto-seeded "admin" account (first boot only).
+  # Leave empty to auto-generate a random password (stored in the chart Secret).
+  adminDefaultPassword: ""
+  # Session signing secret (JWT). Leave empty to auto-generate a random 48-char
+  # value that is persisted across upgrades via a Helm lookup.
+  sessionSecret: ""
+
+# Database connection settings. `user` and `name` are the canonical values used
+# to build DATABASE_URL and, in Bitnami mode, are mirrored into postgresql.auth
+# below (keep them in sync).
+database:
+  user: infra_admin
+  name: asset_manager
+  # sslmode for the in-cluster connection. "disable" is typical for pod-to-pod
+  # traffic; set to "require" if your cluster enforces encryption.
+  sslmode: disable
+  # External database (used only when openshift.enabled=false AND
+  # postgresql.enabled=false). Point the app at a managed/external Postgres.
+  external:
+    host: ""
+    # Name of an existing Secret holding the DB password under `passwordKey`.
+    existingSecret: ""
+    passwordKey: password
+
+# Bitnami PostgreSQL subchart (used when openshift.enabled=false).
+# Full options: https://github.com/bitnami/charts/tree/main/bitnami/postgresql
+postgresql:
+  enabled: true
+  auth:
+    # Keep username/database in sync with .database.user / .database.name above.
+    username: infra_admin
+    database: asset_manager
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+
+# In-chart SCLorg PostgreSQL (used when openshift.enabled=true).
+postgresqlOpenshift:
+  image:
+    repository: quay.io/sclorg/postgresql-15-c9s
+    tag: latest
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 10Gi
+    # storageClassName: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# OpenShift Route (used when openshift.enabled=true).
+route:
+  # host: asset-manager.apps.my-cluster.example.com  # omit to auto-generate
+  host: ""
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+# Kubernetes Ingress (used when openshift.enabled=false).
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+  # host: asset-manager.example.com  # omit for a catch-all rule
+  host: ""
+  tls: []
+  #  - secretName: asset-manager-tls
+  #    hosts:
+  #      - asset-manager.example.com
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+# Pod-level security context. Left empty so OpenShift can assign an arbitrary
+# UID/FSGroup from the namespace range. On vanilla k8s the container context
+# below is still applied.
+podSecurityContext: {}
+
+# Container-level security context (satisfies OpenShift restricted-v2 SCC).
+securityContext:
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+livenessProbe:
+  httpGet:
+    path: /api/health
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 20
+
+readinessProbe:
+  httpGet:
+    path: /api/health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

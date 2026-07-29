@@ -3,9 +3,9 @@ import { db, NewServerAsset } from "@/lib/db";
 import { authorize } from "@/lib/auth";
 
 // GET /api/servers - Get all servers and storage mode
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const auth = await authorize("viewer");
+    const auth = await authorize(request, "viewer");
     if ("response" in auth) return auth.response;
 
     const servers = await db.getServers();
@@ -27,7 +27,7 @@ export async function GET() {
 // POST /api/servers - Create a new server
 export async function POST(request: Request) {
   try {
-    const auth = await authorize("operator");
+    const auth = await authorize(request, "operator");
     if ("response" in auth) return auth.response;
 
     const body = await request.json();

@@ -1,0 +1,39 @@
+Asset Manager has been deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Database mode: {{ include "asset-manager.db.mode" . }}
+Image:         {{ include "asset-manager.image" . }}
+
+{{- if .Values.openshift.enabled }}
+
+OpenShift Route:
+  oc get route {{ include "asset-manager.fullname" . }} -n {{ .Release.Namespace }} -o jsonpath='{"https://"}{.spec.host}{"\n"}'
+{{- else if .Values.ingress.enabled }}
+
+Ingress host:
+{{- if .Values.ingress.host }}
+  http://{{ .Values.ingress.host }}/
+{{- else }}
+  kubectl get ingress {{ include "asset-manager.fullname" . }} -n {{ .Release.Namespace }}
+{{- end }}
+{{- else }}
+
+Service (no external exposure configured). Port-forward with:
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "asset-manager.fullname" . }} 8080:{{ .Values.service.port }}
+  # then open http://localhost:8080
+{{- end }}
+
+First-login credentials:
+  Username: admin
+  Password: {{ if .Values.app.adminDefaultPassword }}(the value you set in app.adminDefaultPassword){{ else }}auto-generated — retrieve it with:
+    kubectl get secret {{ include "asset-manager.secretName" . }} -n {{ .Release.Namespace }} -o jsonpath='{.data.admin-default-password}' | base64 -d; echo{{ end }}
+
+Change the admin password immediately after first login.
+
+{{- if and (not .Values.openshift.enabled) .Values.postgresql.enabled }}
+
+NOTE (Bitnami PostgreSQL): the DB password is managed by the Bitnami subchart's
+Secret ({{ .Release.Name }}-postgresql). On `helm upgrade` you must pass the
+existing password or the upgrade will fail, e.g.:
+  helm upgrade {{ .Release.Name }} <chart> --reuse-values \
+    --set postgresql.auth.password=$(kubectl get secret {{ .Release.Name }}-postgresql -n {{ .Release.Namespace }} -o jsonpath='{.data.password}' | base64 -d)
+{{- end }}

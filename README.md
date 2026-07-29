@@ -18,8 +18,8 @@ storage for zero-config local development.
 - Admin-only user management UI under `/users`
 - REST API under `/api/servers`, `/api/users`, and `/api/auth`
 - Dual storage: PostgreSQL in production, JSON file fallback in development
-- Container-ready (standalone Next.js output) with Docker, Kubernetes, and
-  OpenShift manifests included
+- Container-ready (standalone Next.js output) with a Docker image and a Helm
+  chart for Kubernetes and OpenShift
 
 ## Authentication & Roles
 
@@ -139,62 +139,71 @@ docker compose up --build
 
 The app is available at [http://localhost:3000](http://localhost:3000).
 
-## Deploy to Kubernetes
+## Deploy with Helm
 
-Vanilla Kubernetes manifests (Ingress + LoadBalancer) live in `k8s/`:
+A single chart lives in `charts/asset-manager/`. It runs on both vanilla
+Kubernetes and OpenShift, selected with one flag:
 
-```bash
-kubectl apply -f k8s/manifests.yaml
-```
+| `openshift.enabled` | Database                                   | Ingress    |
+| ------------------- | ------------------------------------------ | ---------- |
+| `false` (default)   | Bitnami PostgreSQL subchart                | Ingress    |
+| `true`              | In-chart SCLorg PostgreSQL (arbitrary-UID) | Route (TLS)|
 
-Update the image reference in `k8s/manifests.yaml` to your registry path first.
+`SESSION_SECRET`, the seeded admin password, and (in OpenShift mode) the
+database password are **auto-generated** on install and preserved across
+upgrades — nothing secret is committed to git. Override any of them via
+`app.sessionSecret`, `app.adminDefaultPassword`, etc.
 
-## Deploy to OpenShift
-
-OpenShift-native manifests live in `openshift/`. They differ from the plain
-Kubernetes set in a few important ways:
-
-- A **Route** with edge TLS is used instead of an Ingress.
-- PostgreSQL uses the **SCL/RHEL PostgreSQL image** (`quay.io/sclorg/postgresql-15-c9s`),
-  which runs correctly under OpenShift's default `restricted-v2` SCC (arbitrary
-  UID). The community `postgres` image does not.
-- The app Deployment sets no fixed `runAsUser`, letting OpenShift assign a UID.
-  The `Dockerfile` is configured so all writable paths are owned by group `0`
-  and group-writable to support this.
-
-### 1. Build and push the image
+Build and push the image first (the `Dockerfile` is OpenShift `restricted-v2`
+SCC compatible — non-root, group-`0`-writable paths):
 
 ```bash
-# Build with the OpenShift-compatible Dockerfile
 docker build -t quay.io/your-org/asset-manager:latest .
 docker push quay.io/your-org/asset-manager:latest
 ```
 
-Then set that image in `openshift/03-asset-manager.yaml`. Alternatively, build
-in-cluster:
+### Kubernetes (default: Bitnami PostgreSQL + Ingress)
 
 ```bash
-oc new-build --name asset-manager --binary --strategy docker -n infraops
-oc start-build asset-manager --from-dir . --follow -n infraops
+helm dependency update charts/asset-manager   # fetch the Bitnami subchart (once)
+
+helm install asset-manager charts/asset-manager \
+  -n infraops --create-namespace \
+  --set image.repository=quay.io/your-org/asset-manager \
+  --set image.tag=latest \
+  --set ingress.host=asset-manager.example.com
 ```
 
-### 2. Configure secrets
+### OpenShift (SCLorg PostgreSQL + Route)
 
-Edit `openshift/01-db-secret.yaml` and change `database-user`,
-`database-password`, `database-name`, `session-secret`, and
-`admin-default-password` before applying.
-
-### 3. Apply the manifests
+`values-openshift.yaml` sets `openshift.enabled=true`, `postgresql.enabled=false`,
+and `ingress.enabled=false` for you (no `helm dependency update` needed):
 
 ```bash
-oc apply -k openshift/
+helm install asset-manager charts/asset-manager \
+  -n infraops --create-namespace \
+  -f charts/asset-manager/values-openshift.yaml \
+  --set image.repository=quay.io/your-org/asset-manager \
+  --set image.tag=latest
+
+# Get the URL
+oc get route asset-manager -n infraops -o jsonpath='{"https://"}{.spec.host}{"\n"}'
 ```
 
-### 4. Get the URL
+### Retrieve the seeded admin password
 
 ```bash
-oc get route asset-manager -n infraops -o jsonpath='{.spec.host}{"\n"}'
+kubectl get secret asset-manager-secret -n infraops \
+  -o jsonpath='{.data.admin-default-password}' | base64 -d; echo
 ```
+
+Change it immediately after the first login.
+
+> **Note:** enabling OpenShift mode requires `postgresql.enabled=false` (the
+> Bitnami subchart and the in-chart SCLorg PostgreSQL are mutually exclusive).
+> The chart fails fast with a clear message if both are enabled. This is because
+> Helm can only toggle a subchart via a static `condition`, so the two flags are
+> coordinated rather than derived from each other.
 
 ## Project Structure
 
@@ -215,8 +224,7 @@ src/
     db.ts               Storage layer (PostgreSQL + JSON fallback)
     session.ts          JWT session encode/decode + cookie handling
     auth.ts             Current-user DAL + role authorization helpers
-k8s/                    Kubernetes manifests
-openshift/              OpenShift manifests (Route, SCC-compatible)
+charts/asset-manager/   Helm chart (Kubernetes + OpenShift)
 Dockerfile              Multi-stage, OpenShift-compatible build
 docker-compose.yml      Local app + PostgreSQL
 ```
